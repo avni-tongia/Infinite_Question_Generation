@@ -5,6 +5,7 @@ Make sure data/HC_Verma.pdf exists before running.
 """
 
 import subprocess
+import sys
 
 SCRIPTS = [
     "Scripts/preprocess_pdf.py",
@@ -20,7 +21,7 @@ SCRIPTS = [
 
 def run_script(script):
     print(f"\n[RUNNING] {script}")
-    result = subprocess.run(["python", script], capture_output=True, text=True)
+    result = subprocess.run([sys.executable, script], capture_output=True, text=True)
     print(result.stdout)
     if result.stderr:
         print("[STDERR]", result.stderr)
