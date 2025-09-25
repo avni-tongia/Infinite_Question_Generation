@@ -1,43 +1,50 @@
 import re
 import json
 
-input_file = "data/biology2e_raw.txt"
-output_json = "data/biology2e_structured.json"
-output_md = "data/biology2e_structured.md"
+# Input and output paths
+INPUT_FILE = "data/hcverma_raw.txt"
+OUTPUT_JSON = "data/hcverma_structured.json"
+OUTPUT_MD = "data/hcverma_structured.md"
 
-with open(input_file, "r", encoding="utf-8") as f:
-    raw_text = f.read()
+def load_raw_text(path):
+    """Read the raw text file and return as a string."""
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
 
-# Split by chapters
-chapters = re.split(r'CHAPTER\s+\d+', raw_text, flags=re.IGNORECASE)
-
-structured_data = []
-
-for i, chapter_text in enumerate(chapters[1:], 1):  # skip index 0, it's before first chapter
-    # Optionally, split by sections (1.1, 1.2 etc.)
-    sections = re.split(r'\n\d+\.\d+\s+', chapter_text)
-    chapter_dict = {"chapter_number": i, "sections": []}
+def split_into_chapters(raw_text):
+    """
+    Splits raw text into chapters based on the keyword 'Chapter'.
+    Adjust the regex if chapter headings look different in HC Verma.
+    """
+    chapters = re.split(r"(?:^|\n)(Chapter\s+\d+.*)", raw_text)
+    structured = []
     
-    for j, sec_text in enumerate(sections[1:], 1):
-        chapter_dict["sections"].append({
-            "section_number": f"{i}.{j}",
-            "text": sec_text.strip(),
-            "examples": [],  # will fill later
-            "problems": []   # will fill later
+    for i in range(1, len(chapters), 2):
+        title = chapters[i].strip()
+        content = chapters[i+1].strip()
+        structured.append({
+            "chapter_title": title,
+            "content": content,
+            "sections": []  # sections can be extracted later
         })
-    
-    structured_data.append(chapter_dict)
+    return structured
 
-# Save JSON
-with open(output_json, "w", encoding="utf-8") as f:
-    json.dump(structured_data, f, indent=4)
+def save_outputs(chapters):
+    """Save structured data as JSON and Markdown."""
+    with open(OUTPUT_JSON, "w", encoding="utf-8") as f:
+        json.dump(chapters, f, indent=2)
 
-# Save Markdown
-with open(output_md, "w", encoding="utf-8") as f:
-    for chapter in structured_data:
-        f.write(f"# Chapter {chapter['chapter_number']}\n\n")
-        for sec in chapter["sections"]:
-            f.write(f"## Section {sec['section_number']}\n")
-            f.write(sec['text'] + "\n\n")
+    with open(OUTPUT_MD, "w", encoding="utf-8") as f:
+        for ch in chapters:
+            f.write(f"# {ch['chapter_title']}\n\n{ch['content']}\n\n")
 
-print("✅ Structured JSON and Markdown created!")
+if __name__ == "__main__":
+    print("[INFO] Loading raw text...")
+    raw_text = load_raw_text(INPUT_FILE)
+
+    print("[INFO] Splitting into chapters...")
+    chapters = split_into_chapters(raw_text)
+
+    print(f"[INFO] Found {len(chapters)} chapters.")
+    save_outputs(chapters)
+    print(f"[INFO] Structured data saved to {OUTPUT_JSON} and {OUTPUT_MD}")

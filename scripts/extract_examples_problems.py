@@ -1,44 +1,35 @@
 import json
-import re
 
-input_json = "data/biology2e_structured.json"
-output_json = "data/biology2e_with_examples.json"
+INPUT_FILE = "data/hcverma_structured.json"
+OUTPUT_FILE = "data/hcverma_with_examples.json"
 
-# Load the structured JSON
-with open(input_json, "r", encoding="utf-8") as f:
-    data = json.load(f)
+def load_structured_data(path):
+    """Load structured chapters/sections JSON."""
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
-# Patterns to detect examples and problems
-example_pattern = re.compile(r'(Example\s*\d*[:.-]?)', re.IGNORECASE)
-problem_pattern = re.compile(r'(Exercise|Practice Problem|Question\s*\d*[:.-]?)', re.IGNORECASE)
+def enrich_with_examples(data):
+    """
+    Adds placeholder 'examples' and 'problems' fields to each chapter.
+    Later, we’ll parse text more intelligently.
+    """
+    for chapter in data:
+        # Add empty examples/problems lists
+        chapter["examples"] = []
+        chapter["problems"] = []
+    return data
 
-# Process each section
-for chapter in data:
-    for section in chapter["sections"]:
-        text = section["text"]
+def save_json(data, path):
+    """Writes updated structured data back to disk."""
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
 
-        # Extract examples
-        examples = example_pattern.split(text)
-        section["examples"] = []
-        if len(examples) > 1:
-            for i in range(1, len(examples), 2):
-                section["examples"].append({
-                    "title": examples[i].strip(),
-                    "text": examples[i+1].strip() if i+1 < len(examples) else ""
-                })
+if __name__ == "__main__":
+    print("[INFO] Loading structured data...")
+    structured_data = load_structured_data(INPUT_FILE)
 
-        # Extract problems
-        problems = problem_pattern.split(text)
-        section["problems"] = []
-        if len(problems) > 1:
-            for i in range(1, len(problems), 2):
-                section["problems"].append({
-                    "title": problems[i].strip(),
-                    "text": problems[i+1].strip() if i+1 < len(problems) else ""
-                })
+    print("[INFO] Adding example/problem placeholders...")
+    updated_data = enrich_with_examples(structured_data)
 
-# Save updated JSON
-with open(output_json, "w", encoding="utf-8") as f:
-    json.dump(data, f, indent=4)
-
-print(f"✅ Examples and problems extracted to {output_json}")
+    save_json(updated_data, OUTPUT_FILE)
+    print(f"[INFO] Data with examples/problems saved to {OUTPUT_FILE}")

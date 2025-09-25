@@ -1,0 +1,8 @@
+pdfplumber
+pymupdf
+pillow
+pytesseract
+camelot-py[cv]
+tabula-py
+sentence-transformers
+numpy

@@ -16,7 +16,6 @@ __pycache__/
 venv/
 
 # Data files
-data/raw/
-data/processed/
+data/
 
 
