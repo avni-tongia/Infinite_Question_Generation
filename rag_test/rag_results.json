@@ -1,0 +1,26 @@
+[
+  {
+    "question": "What is Newton's first law of motion?",
+    "retrieved_contexts": [
+      "Newton’s first law states that an object remains at rest or in uniform motion unless acted upon by an external force.",
+      "Newton’s third law states that for every action, there is an equal and opposite reaction.",
+      "Newton’s second law states that the rate of change of momentum of an object is directly proportional to the force applied."
+    ]
+  },
+  {
+    "question": "Explain the concept of potential energy.",
+    "retrieved_contexts": [
+      "Potential energy is the stored energy of an object due to its position or configuration.",
+      "For example, a ball held at a height has gravitational potential energy.",
+      "Newton’s first law states that an object remains at rest or in uniform motion unless acted upon by an external force."
+    ]
+  },
+  {
+    "question": "What happens when two equal forces act in opposite directions?",
+    "retrieved_contexts": [
+      "When two equal and opposite forces act on a body, they form a couple and cause rotation without translation.",
+      "Newton’s third law states that for every action, there is an equal and opposite reaction.",
+      "Chapter 1: Laws of Motion"
+    ]
+  }
+]
