@@ -75,7 +75,24 @@ def split_into_chapters(raw_text):
         current["page_span"][1] = pages[-1]["page"] if pages else 0
         chapters.append(current)
 
-    return chapters
+    by_num = {}
+    for ch in chapters:
+        num = ch["chapter_number"]
+        span = ch.get("page_span", [0, 0])
+        width = span[1] - span[0]
+
+        if num not in by_num:
+            by_num[num] = ch
+        else:
+            prev = by_num[num]
+            prev_span = prev.get("page_span", [0, 0])
+            prev_width = prev_span[1] - prev_span[0]
+            if width > prev_width:
+                by_num[num] = ch
+
+    # Return chapters ordered by chapter_number (1, 2, 3, ...)
+    deduped_chapters = [by_num[n] for n in sorted(by_num.keys())]
+    return deduped_chapters
 
 
 def save_outputs(chapters):
