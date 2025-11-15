@@ -37,7 +37,15 @@ def split_into_chapters(raw_text):
     Why: HC Verma formatting can vary between editions or OCR artifacts.
     """
     pages = parse_pages(raw_text)
-    chapter_heading_re = re.compile(r"(?im)^\s*chapter\s+(\d+)[^\n]*$", re.MULTILINE)
+    #chapter_heading_re = re.compile(r"(?im)^\s*chapter\s+(\d+)[^\n]*$", re.MULTILINE)
+    # Only match clean chapter-heading lines like "CHAPTER 5" or "Chapter 12"
+    # - ^ ... $  : the whole line must be just "chapter <number>"
+    # - (?mi)    : multiline, case-insensitive (handles CHAPTER / Chapter)
+    #chapter_heading_re = re.compile(r"(?mi)^\s*chapter\s+(\d+)\s*$")
+    chapter_heading_re = re.compile(
+    r"(?im)^\s*(chapter|chaffer)\s+(\d+)[^\n]*$")
+
+
 
     chapters = []
     current = None
@@ -54,7 +62,7 @@ def split_into_chapters(raw_text):
                 current["page_span"][1] = page_no - 1
                 chapters.append(current)
 
-            chap_num = int(m.group(1))
+            chap_num = int(m.group(2))
             # Start a new chapter record
             current = {
                 "chapter_number": chap_num,

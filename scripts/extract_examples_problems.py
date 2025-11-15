@@ -3,7 +3,7 @@
 Extract solved examples and end-of-chapter problems from structured HC Verma text.
 
 Assumptions (based on your description + book style):
-- All examples are labelled on their own line as:
+- Inline examples are labelled on their own line as:
     "Example 1.1   A block of mass m..."
   where "1.1" means Chapter 1, Example 1.
 
@@ -13,7 +13,7 @@ Assumptions (based on your description + book style):
     followed by fully solved, numbered examples like:
         "1. A block of mass m..."
         ...
-        "Solution"
+        "Solution : ..."
         ...
 
 - We only keep examples where we can find BOTH:
@@ -28,7 +28,6 @@ import json
 import re
 from pathlib import Path
 from typing import List, Dict, Tuple
-from pathlib import Path
 
 # Base directory = folder containing this script (i.e., .../Infinite_Question_Generation/scripts)
 ROOT_DIR = Path(__file__).resolve().parent
@@ -53,13 +52,15 @@ WORKED_OUT_HEADING = re.compile(
 
 # Inline examples, e.g.:
 #   "Example 1.1 A block of mass m ..."
+#   "2 Example 1.1 A block of mass m ..."   (OCR glued page number)
 EXAMPLE_HEAD = re.compile(
-    r"(?im)^\s*example\s+(\d+(?:\.\d+)?)\b.*$"   # captures "1.1", "2.3", etc.
+    r"(?im)^\s*(?:\d+\s+)?example\s+(\d+(?:\.\d+)?)\b.*$"   # captures "1.1", "2.3", etc.
 )
 
 # "Solution" line inside each example block
+# Accepts "Solution", "Solution:", "Solution : text", etc.
 SOLUTION_HEAD = re.compile(
-    r"(?im)^\s*solution\s*[:\.\-]?\s*$"
+    r"(?im)^\s*solution\b"
 )
 
 # End-of-chapter exercise / question section headings
@@ -79,6 +80,11 @@ PROBLEM_ITEM_HEAD = re.compile(
 PROBLEM_HEAD = re.compile(
     r"(?im)^\s*(?:question|q\.?|prob(?:lem)?)\s*[:\-\.\)]*\s*\d+\b.*$"
 )
+
+# Split mid-line occurrences of "N." that look like example numbers (1., 2., 3., …)
+# Used to normalise "Worked Out Examples" pages where many numbers are in the middle of lines.
+INLINE_SUBQ_SPLIT = re.compile(r"(?=(?<!\d)\d{1,2}\.\s)")
+
 
 # ============================================================================
 # UTILS
@@ -132,40 +138,57 @@ def parse_worked_out_section(
     """
     Parse the 'Worked Out Examples' section starting at worked_idx.
 
-    We expect examples like:
+    Original pattern (ideal):
         1. A block of mass m...
            ...
-        Solution
+        Solution : ...
            ...
         2. Another example...
            ...
-        Solution
+        Solution : ...
            ...
-    """
-    section_start = worked_idx + 1
 
-    # Section ends at next exercise heading or end of chapter
+    OCR often shoves "3." / "5." / "7." etc. into the middle of lines.
+    We first normalise by splitting lines on inline "N." patterns so that
+    each example number starts at the beginning of a pseudo-line.
+    """
+
+    # 1) Determine raw section lines
+    section_start = worked_idx + 1
     section_end = len(lines)
     for j in range(section_start, len(lines)):
         if EXERCISE_SECTION_HEAD.match(lines[j]):
             section_end = j
             break
 
-    raw_examples: List[Dict] = []
-    i = section_start
+    raw_body_lines = lines[section_start:section_end]
 
-    while i < section_end:
-        line = lines[i]
+    # 2) Normalise lines:
+    #    split each physical line into segments whenever an inline "N." appears,
+    #    e.g. " ... 3. The SI and CGS units ..." → ["... ", "3. The SI and CGS units ..."]
+    norm_lines: List[str] = []
+    for L in raw_body_lines:
+        for seg in INLINE_SUBQ_SPLIT.split(L):
+            seg = seg.strip()
+            if seg:
+                norm_lines.append(seg)
+
+    raw_examples: List[Dict] = []
+    i = 0
+    n = len(norm_lines)
+
+    while i < n:
+        line = norm_lines[i]
         m_item = PROBLEM_ITEM_HEAD.match(line)  # e.g., "1.  A block ..."
         if m_item:
             ex_start = i
             j = i + 1
-            # Move until next numbered item or section end
-            while j < section_end and not PROBLEM_ITEM_HEAD.match(lines[j]):
+            # Move until next numbered item or end of normalised block
+            while j < n and not PROBLEM_ITEM_HEAD.match(norm_lines[j]):
                 j += 1
             ex_end = j
 
-            seg_lines = lines[ex_start:ex_end]
+            seg_lines = norm_lines[ex_start:ex_end]
 
             # Locate "Solution" inside this segment
             sol_pos = None
@@ -192,7 +215,6 @@ def parse_worked_out_section(
 
             s_part = "\n".join(solution_lines).strip()
 
-
             # Filter out tiny fragments (usually noise)
             if len(q_part) < 20 or len(s_part) < 20:
                 i = ex_end
@@ -204,7 +226,7 @@ def parse_worked_out_section(
             span = estimate_span_from_text(ch_span, block)
 
             raw_examples.append({
-                "line_index": ex_start,
+                "line_index": section_start + ex_start,  # approximate, just for ordering
                 "raw_example_label": None,
                 "question_text": question_text,
                 "solution_text": solution_text,
@@ -231,7 +253,7 @@ def parse_inline_examples(
     Pattern:
         Example 1.1  A block of mass m...
         ...
-        Solution
+        Solution : ...
         ...
         [next Example / Worked Out Examples / Exercise / EOF]
     """
@@ -269,7 +291,7 @@ def parse_inline_examples(
 
             q_block = "\n".join(lines[ex_start:sol_start])
 
-# Build solution block while preserving text after "Solution"
+            # Build solution block while preserving text after "Solution"
             s_lines_full = lines[sol_start:ex_end]
             if not s_lines_full:
                 i = ex_end
@@ -290,7 +312,6 @@ def parse_inline_examples(
 
             question_raw = "\n".join(q_lines).strip()
             solution_raw = "\n".join(solution_lines).strip()
-
 
             # Filter short fragments
             if len(question_raw) < 20 or len(solution_raw) < 20:
