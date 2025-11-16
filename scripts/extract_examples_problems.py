@@ -2,26 +2,24 @@
 """
 Extract solved examples and end-of-chapter problems from structured HC Verma text.
 
-Assumptions (based on your description + book style):
-- Inline examples are labelled on their own line as:
-    "Example 1.1   A block of mass m..."
-  where "1.1" means Chapter 1, Example 1.
+We handle two broad example types:
 
-- Worked-out examples:
-    There is a heading line like:
-        "Worked Out Examples"
-    followed by fully solved, numbered examples like:
-        "1. A block of mass m..."
-        ...
-        "Solution : ..."
-        ...
+1) Inline examples:
+    "2 Example 1.1  A block of mass m..."
+    ...
+    "... Solution : ..."
 
-- We only keep examples where we can find BOTH:
-    - a question part
-    - a Solution block with non-trivial content
+2) Worked Out Examples pages:
+    "Worked Out Examples"
+    "1. Find the dimensional formulae..."
+    ...
+    "... Solution : ..."
 
-- End-of-chapter problems are under headings like:
-    "EXERCISE", "OBJECTIVE QUESTIONS", "SHORT ANSWER TYPE QUESTIONS", etc.
+We only keep examples where we can find BOTH:
+  - a non-trivial question part
+  - a non-trivial solution part
+
+End-of-chapter problems are parsed from exercise / question sections.
 """
 
 import json
@@ -29,81 +27,78 @@ import re
 from pathlib import Path
 from typing import List, Dict, Tuple
 
-# Base directory = folder containing this script (i.e., .../Infinite_Question_Generation/scripts)
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+
 ROOT_DIR = Path(__file__).resolve().parent
 
-# Input from the structuring script
-STRUCTURED_INPUT = ROOT_DIR / "data" / "hcverma_structured.json"
-
-# Outputs (same folder)
+STRUCTURED_INPUT  = ROOT_DIR / "data" / "hcverma_structured.json"
 STRUCTURED_OUTPUT = ROOT_DIR / "data" / "hcverma_with_examples.json"
 EXAMPLES_JSONL    = ROOT_DIR / "data" / "examples.jsonl"
 PROBLEMS_JSONL    = ROOT_DIR / "data" / "problems.jsonl"
 
 
-# ============================================================================
-# REGEX PATTERNS
-# ============================================================================
+# ---------------------------------------------------------------------------
+# Regex patterns
+# ---------------------------------------------------------------------------
 
-# Heading of the worked-out examples section
+# "Worked Out Examples" heading
 WORKED_OUT_HEADING = re.compile(
     r"(?im)^\s*worked\s+out\s+examples\b.*$"
 )
 
-# Inline examples, e.g.:
-#   "Example 1.1 A block of mass m ..."
-#   "2 Example 1.1 A block of mass m ..."   (OCR glued page number)
+# Inline example heading, allowing an OCR page number in front:
+# "Example 1.1", "2 Example 1.1"
+# OLD (anchored at start with ^)
+# EXAMPLE_HEAD = re.compile(
+#     r"(?im)^\s*(?:\d+\s+)?example\s+(\d+(?:\.\d+)?)\b.*$"
+# )
+
+# NEW: match "Example 5.2" anywhere in the line
 EXAMPLE_HEAD = re.compile(
-    r"(?im)^\s*(?:\d+\s+)?example\s+(\d+(?:\.\d+)?)\b.*$"   # captures "1.1", "2.3", etc.
+    r"(?i)example\s+(\d+(?:\.\d+)?)\b"
 )
 
-# "Solution" line inside each example block
-# Accepts "Solution", "Solution:", "Solution : text", etc.
-SOLUTION_HEAD = re.compile(
-    r"(?im)^\s*solution\b"
-)
 
-# End-of-chapter exercise / question section headings
+# We treat any line containing the word "solution" as a solution line
+SOLUTION_FINDER = re.compile(r"(?i)\bsolution\b")
+
+# Exercise / question section headings
 EXERCISE_SECTION_HEAD = re.compile(
     r"(?im)^\s*(?:exercise|exercises|questions|objective\s+questions|"
     r"short\s+answer\s+type\s+questions|miscellaneous\s+questions|"
     r"multiple\s+choice\s+questions)\b.*$"
 )
 
-# Individual problem starters inside those sections:
-#   "1. A block of mass...", "Q. 2) A particle...", "3) Find the..."
+# Individual problem / example numbers, e.g. "1. ...", "Q. 2)", "3)"
 PROBLEM_ITEM_HEAD = re.compile(
     r"(?im)^\s*(?:Q\.?\s*)?(\d+)[\.\)]\s+"
 )
 
-# Alternate "Question 3" style
+# "Question 3" style (used in problem fallback)
 PROBLEM_HEAD = re.compile(
     r"(?im)^\s*(?:question|q\.?|prob(?:lem)?)\s*[:\-\.\)]*\s*\d+\b.*$"
 )
 
-# Split mid-line occurrences of "N." that look like example numbers (1., 2., 3., …)
-# Used to normalise "Worked Out Examples" pages where many numbers are in the middle of lines.
-INLINE_SUBQ_SPLIT = re.compile(r"(?=(?<!\d)\d{1,2}\.\s)")
+# Split mid-line occurrences of "N." that look like example numbers:
+# e.g. "... r h 3. The SI and CGS units ..." → ["... r h", "3. The SI and CGS units ..."]
+INLINE_SUBQ_SPLIT = re.compile(
+    r"(?=(?<!\d)\d{1,2}\.\s)"
+)
 
 
-# ============================================================================
-# UTILS
-# ============================================================================
+# ---------------------------------------------------------------------------
+# Utils
+# ---------------------------------------------------------------------------
 
 def normalize_whitespace(text: str) -> str:
-    """
-    Collapse all whitespace runs into single spaces and trim.
-    Suitable for training text, not for pretty printing.
-    """
+    """Collapse whitespace runs into single spaces and trim."""
     return re.sub(r"\s+", " ", text.strip())
 
 
 def estimate_span_from_text(ch_span: Tuple[int, int], block: str) -> Tuple[int, int]:
-    """
-    Placeholder: for now, just return the chapter's page span.
-    If you want finer granularity later, you can implement
-    proportional page allocation here.
-    """
+    """For now, just return the chapter's page span."""
     return ch_span
 
 
@@ -125,9 +120,9 @@ def write_jsonl(items: List[Dict], path: Path):
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
 
 
-# ============================================================================
-# EXAMPLE EXTRACTION
-# ============================================================================
+# ---------------------------------------------------------------------------
+# Example extraction: Worked Out Examples
+# ---------------------------------------------------------------------------
 
 def parse_worked_out_section(
     chapter: Dict,
@@ -136,24 +131,17 @@ def parse_worked_out_section(
     ch_span: Tuple[int, int]
 ) -> List[Dict]:
     """
-    Parse the 'Worked Out Examples' section starting at worked_idx.
+    Parse a 'Worked Out Examples' section starting at worked_idx.
 
-    Original pattern (ideal):
-        1. A block of mass m...
-           ...
-        Solution : ...
-           ...
-        2. Another example...
-           ...
-        Solution : ...
-           ...
-
-    OCR often shoves "3." / "5." / "7." etc. into the middle of lines.
-    We first normalise by splitting lines on inline "N." patterns so that
-    each example number starts at the beginning of a pseudo-line.
+    We:
+      - take everything until the next exercise / questions section (or EOF),
+      - normalise lines by splitting on mid-line "N." patterns,
+      - for each numbered example:
+          * if there's a 'Solution' line inside its segment → split Q / A
+          * otherwise → keep it as a question-only example (solution_text = "")
     """
 
-    # 1) Determine raw section lines
+    # Section boundaries in the raw line space
     section_start = worked_idx + 1
     section_end = len(lines)
     for j in range(section_start, len(lines)):
@@ -163,9 +151,7 @@ def parse_worked_out_section(
 
     raw_body_lines = lines[section_start:section_end]
 
-    # 2) Normalise lines:
-    #    split each physical line into segments whenever an inline "N." appears,
-    #    e.g. " ... 3. The SI and CGS units ..." → ["... ", "3. The SI and CGS units ..."]
+    # Normalise: split lines on inline "N." so 1., 2., 3., ... start new pseudo-lines
     norm_lines: List[str] = []
     for L in raw_body_lines:
         for seg in INLINE_SUBQ_SPLIT.split(L):
@@ -173,74 +159,98 @@ def parse_worked_out_section(
             if seg:
                 norm_lines.append(seg)
 
-    raw_examples: List[Dict] = []
-    i = 0
+    examples: List[Dict] = []
     n = len(norm_lines)
 
+    i = 0
     while i < n:
         line = norm_lines[i]
-        m_item = PROBLEM_ITEM_HEAD.match(line)  # e.g., "1.  A block ..."
-        if m_item:
-            ex_start = i
-            j = i + 1
-            # Move until next numbered item or end of normalised block
-            while j < n and not PROBLEM_ITEM_HEAD.match(norm_lines[j]):
-                j += 1
-            ex_end = j
-
-            seg_lines = norm_lines[ex_start:ex_end]
-
-            # Locate "Solution" inside this segment
-            sol_pos = None
-            for k, L in enumerate(seg_lines):
-                if SOLUTION_HEAD.match(L):
-                    sol_pos = k
-                    break
-
-            # Require explicit Solution with content after it
-            if sol_pos is None:
-                i = ex_end
-                continue
-
-            q_part = "\n".join(seg_lines[:sol_pos]).strip()
-
-            # Keep the text on the "Solution..." line after the label
-            solution_first = seg_lines[sol_pos]
-            after_label = re.sub(r"(?im)^\s*solution\b[:\.\-]?\s*", "", solution_first).strip()
-
-            solution_lines = []
-            if after_label:
-                solution_lines.append(after_label)
-            solution_lines.extend(seg_lines[sol_pos + 1:])
-
-            s_part = "\n".join(solution_lines).strip()
-
-            # Filter out tiny fragments (usually noise)
-            if len(q_part) < 20 or len(s_part) < 20:
-                i = ex_end
-                continue
-
-            question_text = normalize_whitespace(q_part)
-            solution_text = normalize_whitespace(s_part)
-            block = "\n".join(seg_lines)
-            span = estimate_span_from_text(ch_span, block)
-
-            raw_examples.append({
-                "line_index": section_start + ex_start,  # approximate, just for ordering
-                "raw_example_label": None,
-                "question_text": question_text,
-                "solution_text": solution_text,
-                "block": block,
-                "page_span": list(span),
-            })
-
-            i = ex_end
+        m_item = PROBLEM_ITEM_HEAD.match(line)
+        if not m_item:
+            i += 1
             continue
 
-        i += 1
+        # Candidate example anchored at this number
+        ex_start = i
+        j = i + 1
+        while j < n and not PROBLEM_ITEM_HEAD.match(norm_lines[j]):
+            j += 1
 
-    return raw_examples
+        seg_lines = norm_lines[ex_start:j]
 
+        # ------------------------------------------------------------------
+        # 1) Try to find a 'Solution' line inside this numbered block
+        # ------------------------------------------------------------------
+        sol_pos = None
+        for k, L in enumerate(seg_lines):
+            if SOLUTION_FINDER.search(L):
+                sol_pos = k
+                break
+
+        if sol_pos is not None:
+            # Question lines are everything before the solution line
+            q_lines = seg_lines[:sol_pos]
+
+            # Solution lines: strip 'Solution' label even if it appears mid-line
+            first_sol_line = seg_lines[sol_pos]
+            m_sol = re.search(r"(?i)\bsolution\b[:\.\-]?\s*(.*)", first_sol_line)
+            sol_lines: List[str] = []
+            if m_sol:
+                rest = m_sol.group(1).strip()
+                if rest:
+                    sol_lines.append(rest)
+            else:
+                sol_lines.append(first_sol_line.strip())
+            sol_lines.extend(seg_lines[sol_pos + 1:])
+
+            q_raw = "\n".join(q_lines).strip()
+            s_raw = "\n".join(sol_lines).strip()
+
+            # Filter out very tiny / noisy fragments
+            if len(q_raw) >= 20 and len(s_raw) >= 15:
+                question_text = normalize_whitespace(q_raw)
+                solution_text = normalize_whitespace(s_raw)
+                block = "\n".join(seg_lines)
+                span = estimate_span_from_text(ch_span, block)
+
+                examples.append({
+                    "line_index": section_start + ex_start,
+                    "raw_example_label": None,
+                    "question_text": question_text,
+                    "solution_text": solution_text,
+                    "block": block,
+                    "page_span": list(span),
+                })
+
+        else:
+            # ------------------------------------------------------------------
+            # 2) No 'Solution' line inside this numbered block
+            #    → keep it as a question-only example (solution_text = "")
+            # ------------------------------------------------------------------
+            q_raw = "\n".join(seg_lines).strip()
+            if len(q_raw) >= 20:
+                question_text = normalize_whitespace(q_raw)
+                block = "\n".join(seg_lines)
+                span = estimate_span_from_text(ch_span, block)
+
+                examples.append({
+                    "line_index": section_start + ex_start,
+                    "raw_example_label": None,
+                    "question_text": question_text,
+                    "solution_text": "",  # no explicit solution detected
+                    "block": block,
+                    "page_span": list(span),
+                })
+
+        i = j
+
+    return examples
+
+
+
+# ---------------------------------------------------------------------------
+# Example extraction: Inline "Example 1.1" style
+# ---------------------------------------------------------------------------
 
 def parse_inline_examples(
     chapter: Dict,
@@ -248,62 +258,71 @@ def parse_inline_examples(
     ch_span: Tuple[int, int]
 ) -> List[Dict]:
     """
-    Parse inline "Example 1.1" style solved examples from the whole chapter text.
+    Parse inline "Example 1.1" style solved examples.
 
     Pattern:
-        Example 1.1  A block of mass m...
+        "2 Example 1.1 ..."
         ...
-        Solution : ...
-        ...
-        [next Example / Worked Out Examples / Exercise / EOF]
+        "... Solution : ...
+        ..."
+
+    Behaviour:
+      - If a 'Solution' line is found inside the example block → split Q / A.
+      - If no 'Solution' is found → keep it as a question-only example
+        (solution_text = ""), so nothing silently disappears.
     """
+    n = len(lines)
     raw_examples: List[Dict] = []
     i = 0
-    n = len(lines)
 
     while i < n:
         line = lines[i]
-        m_ex = EXAMPLE_HEAD.match(line)
-        if m_ex:
-            raw_label = m_ex.group(1)  # "1.1", "2.3", etc.
-            ex_start = i
+        m_ex = EXAMPLE_HEAD.search(line)
+        if not m_ex:
+            i += 1
+            continue
 
-            sol_start = None
-            j = i + 1
-            while j < n:
-                # Termination conditions for this example block
-                if EXAMPLE_HEAD.match(lines[j]) \
-                   or WORKED_OUT_HEADING.match(lines[j]) \
-                   or EXERCISE_SECTION_HEAD.match(lines[j]):
-                    break
+        raw_label = m_ex.group(1)  # "1.1", "2.3", etc.
+        ex_start = i
+        sol_start = None
 
-                if SOLUTION_HEAD.match(lines[j]) and sol_start is None:
-                    sol_start = j
+        j = i + 1
+        while j < n:
+            # Stop when we hit the next block start
+            if EXAMPLE_HEAD.search(lines[j]) \
+               or WORKED_OUT_HEADING.match(lines[j]) \
+               or EXERCISE_SECTION_HEAD.match(lines[j]):
+                break
 
-                j += 1
+            # First line containing "Solution" marks start of solution
+            if sol_start is None and SOLUTION_FINDER.search(lines[j]):
+                sol_start = j
 
-            ex_end = j
+            j += 1
 
-            # Require explicit Solution with content
-            if sol_start is None or sol_start >= ex_end - 1:
-                i = ex_end
-                continue
+        ex_end = j
 
+        # ------------------------------------------------------------------
+        # Case 1: we found a 'Solution' line in this example block
+        # ------------------------------------------------------------------
+        if sol_start is not None and sol_start < ex_end:
             q_block = "\n".join(lines[ex_start:sol_start])
 
-            # Build solution block while preserving text after "Solution"
             s_lines_full = lines[sol_start:ex_end]
             if not s_lines_full:
                 i = ex_end
                 continue
 
             first_sol_line = s_lines_full[0]
-            after_label = re.sub(r"(?im)^\s*solution\b[:\.\-]?\s*", "", first_sol_line).strip()
-
-            solution_lines = []
-            if after_label:
-                solution_lines.append(after_label)
-            solution_lines.extend(s_lines_full[1:])
+            m_sol = re.search(r"(?i)\bsolution\b[:\.\-]?\s*(.*)", first_sol_line)
+            sol_lines: List[str] = []
+            if m_sol:
+                rest = m_sol.group(1).strip()
+                if rest:
+                    sol_lines.append(rest)
+            else:
+                sol_lines.append(first_sol_line.strip())
+            sol_lines.extend(s_lines_full[1:])
 
             q_lines = q_block.splitlines()
             if q_lines:
@@ -311,10 +330,10 @@ def parse_inline_examples(
                 q_lines = q_lines[1:]
 
             question_raw = "\n".join(q_lines).strip()
-            solution_raw = "\n".join(solution_lines).strip()
+            solution_raw = "\n".join(sol_lines).strip()
 
-            # Filter short fragments
-            if len(question_raw) < 20 or len(solution_raw) < 20:
+            # Require a non-trivial question; solution can be shorter
+            if len(question_raw) < 20:
                 i = ex_end
                 continue
 
@@ -332,22 +351,40 @@ def parse_inline_examples(
                 "page_span": list(span),
             })
 
-            i = ex_end
-            continue
+        # ------------------------------------------------------------------
+        # Case 2: NO 'Solution' inside this Example block
+        #         → keep question-only example
+        # ------------------------------------------------------------------
+        else:
+            q_block = "\n".join(lines[ex_start:ex_end])
+            q_lines = q_block.splitlines()
+            if q_lines:
+                # Drop "Example ..." heading line
+                q_lines = q_lines[1:]
+            question_raw = "\n".join(q_lines).strip()
 
-        i += 1
+            if len(question_raw) >= 20:
+                question_text = normalize_whitespace(question_raw)
+                block = "\n".join(lines[ex_start:ex_end])
+                span = estimate_span_from_text(ch_span, block)
+
+                raw_examples.append({
+                    "line_index": ex_start,
+                    "raw_example_label": raw_label,
+                    "question_text": question_text,
+                    "solution_text": "",  # no explicit solution in this block
+                    "block": block,
+                    "page_span": list(span),
+                })
+
+        i = ex_end
 
     return raw_examples
 
 
-def extract_examples_from_chapter(chapter: Dict) -> List[Dict]:
-    """
-    Extract all solved examples from a chapter, combining:
-    - Inline "Example 1.1" style
-    - Worked Out Examples section
 
-    Only examples that have a clear Question + Solution pair are kept.
-    """
+def extract_examples_from_chapter(chapter: Dict) -> List[Dict]:
+    """Combine inline and worked-out examples for a chapter."""
     content = chapter.get("content", "")
     ch_span = tuple(chapter.get("page_span", (0, 0)))
     lines = content.splitlines()
@@ -362,17 +399,15 @@ def extract_examples_from_chapter(chapter: Dict) -> List[Dict]:
         if WORKED_OUT_HEADING.match(line):
             raw_examples.extend(parse_worked_out_section(chapter, lines, idx, ch_span))
 
-    # 2) Inline examples
+    # 2) Inline "Example n.m" blocks
     raw_examples.extend(parse_inline_examples(chapter, lines, ch_span))
 
-    # 3) Sort by line_index and assign example_ids
+    # 3) Sort + dedupe by (line_index, question_text prefix)
     raw_examples.sort(key=lambda ex: ex["line_index"])
-
     examples: List[Dict] = []
     seen_keys = set()
 
     for ex_idx, ex in enumerate(raw_examples, start=1):
-        # dedupe by (line_index, start-of-question)
         key = (ex["line_index"], ex["question_text"][:50])
         if key in seen_keys:
             continue
@@ -389,26 +424,19 @@ def extract_examples_from_chapter(chapter: Dict) -> List[Dict]:
             "concept_tags": [],
             "difficulty": None,
             "equations_used": [],
-            "function_signatures": []
+            "function_signatures": [],
         })
 
     return examples
 
 
-# ============================================================================
-# PROBLEM EXTRACTION
-# ============================================================================
+# ---------------------------------------------------------------------------
+# Problem extraction (unchanged logic)
+# ---------------------------------------------------------------------------
 
 def extract_problems_from_chapter(chapter: Dict) -> List[Dict]:
     """
-    Extract end-of-chapter problems.
-
-    Strategy:
-      1) Identify exercise / question sections via EXERCISE_SECTION_HEAD.
-      2) Within those, individual problems start at PROBLEM_ITEM_HEAD ("1.", "Q. 2)", ...)
-         or PROBLEM_HEAD ("Question 3").
-      3) Each problem continues until the next problem anchor, the next exercise heading,
-         or EOF.
+    Extract end-of-chapter problems from exercise / questions sections.
     """
     content = chapter.get("content", "")
     ch_span = tuple(chapter.get("page_span", (0, 0)))
@@ -420,14 +448,11 @@ def extract_problems_from_chapter(chapter: Dict) -> List[Dict]:
     problems: List[Dict] = []
     pb_idx = 0
 
-    # 1) Find all exercise / question section starts
     section_starts: List[int] = [
         idx for idx, line in enumerate(lines) if EXERCISE_SECTION_HEAD.match(line)
     ]
 
-    # ----------------------------------------------------------------------
-    # Fallback path: no explicit EXERCISE-like headings found
-    # ----------------------------------------------------------------------
+    # Fallback if we have no explicit EXERCISE headings
     if not section_starts:
         i = 0
         n = len(lines)
@@ -447,11 +472,10 @@ def extract_problems_from_chapter(chapter: Dict) -> List[Dict]:
                 block = "\n".join(lines[pb_start:pb_end])
                 pb_lines = block.splitlines()
                 if pb_lines:
-                    pb_lines = pb_lines[1:]  # drop "Question 1" line
+                    pb_lines = pb_lines[1:]
                 question_raw = "\n".join(pb_lines)
                 question_text = normalize_whitespace(question_raw)
 
-                # filter tiny fragments
                 if len(question_text) < 10:
                     i = pb_end
                     continue
@@ -467,7 +491,7 @@ def extract_problems_from_chapter(chapter: Dict) -> List[Dict]:
                     "question_text": question_text,
                     "concept_tags": [],
                     "difficulty": None,
-                    "equations_candidates": []
+                    "equations_candidates": [],
                 })
 
                 i = pb_end
@@ -477,12 +501,10 @@ def extract_problems_from_chapter(chapter: Dict) -> List[Dict]:
 
         return problems
 
-    # ----------------------------------------------------------------------
-    # Normal path: parse sections marked as EXERCISE / OBJECTIVE QUESTIONS / etc.
-    # ----------------------------------------------------------------------
+    # Normal path: explicit exercise sections
     n = len(lines)
     for idx, start in enumerate(section_starts):
-        section_start = start + 1  # skip the heading line
+        section_start = start + 1
         section_end = section_starts[idx + 1] if idx + 1 < len(section_starts) else n
 
         i = section_start
@@ -507,7 +529,7 @@ def extract_problems_from_chapter(chapter: Dict) -> List[Dict]:
                 block = "\n".join(lines[pb_start:pb_end])
                 pb_lines = block.splitlines()
                 if pb_lines:
-                    pb_lines = pb_lines[1:]  # drop "1." / "Q. 2" / "Question 3" line
+                    pb_lines = pb_lines[1:]
                 question_raw = "\n".join(pb_lines)
                 question_text = normalize_whitespace(question_raw)
 
@@ -530,7 +552,7 @@ def extract_problems_from_chapter(chapter: Dict) -> List[Dict]:
                     "question_text": question_text,
                     "concept_tags": [],
                     "difficulty": None,
-                    "equations_candidates": []
+                    "equations_candidates": [],
                 })
 
                 i = pb_end
@@ -541,14 +563,14 @@ def extract_problems_from_chapter(chapter: Dict) -> List[Dict]:
     return problems
 
 
-# ============================================================================
-# MAIN PIPELINE
-# ============================================================================
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main():
     chapters = load_chapters(STRUCTURED_INPUT)
 
-    # Assign chapter_number if missing
+    # Ensure chapter_number is always present
     for idx, ch in enumerate(chapters, start=1):
         if "chapter_number" not in ch or ch["chapter_number"] is None:
             ch["chapter_number"] = idx
@@ -571,10 +593,7 @@ def main():
             f"{len(exs)} examples, {len(pbs)} problems"
         )
 
-    # Save updated chapters
     save_json(chapters, STRUCTURED_OUTPUT)
-
-    # Save flat corpora
     write_jsonl(all_examples, EXAMPLES_JSONL)
     write_jsonl(all_problems, PROBLEMS_JSONL)
 
