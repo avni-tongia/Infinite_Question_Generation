@@ -1,174 +1,241 @@
-
+#!/usr/bin/env python3
 """
 index_manifest.py
-Builds a global manifest that links chapters to page spans and to multimodal objects.
-Inputs:
-- data/hcverma_structured.json
-- data/hcverma_raw.txt (with --- Page N --- markers)
-- data/equations/equations.jsonl
-- data/figures/figures.jsonl
-- data/tables/tables.jsonl
+
+Build a central manifest tying together:
+- Chapters (from hcverma_with_examples.json)
+- Examples (references from chapters)
+- Problems (references from chapters)
+- Equations (from equations.jsonl, assigned to chapters by page_span)
+
 Output:
-- data/manifest.json
+    scripts/data/manifest.json
+
+Structure (top-level):
+{
+  "chapters": [
+    {
+      "chapter_id": "Ch01",
+      "chapter_number": 1,
+      "chapter_title": "Chapter 1: ...",
+      "page_span": [start_page, end_page],
+      "examples": ["Ch01_Ex01", "Ch01_Ex02", ...],
+      "problems": ["Ch01_Q001", "Ch01_Q002", ...],
+      "equations": ["eq_p0017_001", "eq_p0019_002", ...]
+    },
+    ...
+  ],
+  "pages": {
+    "17": {
+      "equations": ["eq_p0017_001", "eq_p0017_002"]
+    },
+    ...
+  }
+}
 """
+
 import json
-import re
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import Any, Dict, List
 
-STRUCT_JSON = "data/hcverma_structured.json"
-RAW_TEXT = "data/hcverma_raw.txt"
-EQ_JSONL = "data/equations/equations.jsonl"
-FIG_JSONL = "data/figures/figures.jsonl"
-TBL_JSONL = "data/tables/tables.jsonl"
-OUT_PATH = "data/manifest.json"
+# ---------------------------------------------------------------------
+# PATHS (relative to .../Infinite_Question_Generation/scripts)
+# ---------------------------------------------------------------------
 
-PAGE_MARKER = re.compile(r"^--- Page (\d+) ---\s*$")
+ROOT_DIR = Path(__file__).resolve().parent
 
-def load_json(path: str):
-    with open(path, "r", encoding="utf-8") as f:
+STRUCT_JSON = ROOT_DIR / "data" / "hcverma_with_examples.json"
+EQ_JSONL    = ROOT_DIR / "data" / "equations" / "equations.jsonl"
+
+OUT_PATH    = ROOT_DIR / "data" / "manifest.json"
+
+
+# ---------------------------------------------------------------------
+# I/O HELPERS
+# ---------------------------------------------------------------------
+
+def load_json(path: Path) -> Any:
+    with path.open("r", encoding="utf-8") as f:
         return json.load(f)
 
-def load_jsonl(path: str):
-    items = []
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                items.append(json.loads(line))
-    except FileNotFoundError:
-        pass
+
+def load_jsonl(path: Path) -> List[Dict]:
+    path = Path(path)
+    items: List[Dict] = []
+    if not path.exists():
+        return items
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            items.append(json.loads(line))
     return items
 
-def find_chapter_page_spans(chapters, raw_text_path: str):
-    # Strategy: find the page number where each chapter title first occurs; span ends before next chapter start
-    page_texts = []
-    curr_page = None
-    buf = []
-    with open(raw_text_path, "r", encoding="utf-8") as f:
-        for line in f:
-            m = PAGE_MARKER.match(line.strip())
-            if m:
-                if curr_page is not None:
-                    page_texts.append((curr_page, "".join(buf)))
-                curr_page = int(m.group(1))
-                buf = []
-            else:
-                if curr_page is not None:
-                    buf.append(line)
-    if curr_page is not None:
-        page_texts.append((curr_page, "".join(buf)))
 
-    # Build page index for search
-    chapter_starts = []
+def save_json(obj: Any, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------------
+# CORE LOGIC
+# ---------------------------------------------------------------------
+
+def build_chapter_index(chapters: List[Dict]) -> List[Dict]:
+    """
+    Prepare a lightweight index for chapters with page spans.
+
+    Each entry:
+    {
+      "chapter_number": int,
+      "chapter_title": str,
+      "chapter_id": str,
+      "page_start": int,
+      "page_end": int,
+      "examples": [example_ids...],
+      "problems": [problem_ids...]
+    }
+    """
+    index: List[Dict] = []
+
     for ch in chapters:
-        title = ch.get("chapter_title","").strip()
-        start_page = None
-        for pno, ptxt in page_texts:
-            if title and title in ptxt:
-                start_page = pno
-                break
-        # fallback heuristic: first page that contains "Chapter X"
-        if start_page is None:
-            # try simple "Chapter N" prefix search
-            m = re.match(r"(Chapter\s+\d+)", title)
-            if m:
-                key = m.group(1)
-                for pno, ptxt in page_texts:
-                    if key in ptxt:
-                        start_page = pno
-                        break
-        chapter_starts.append(start_page or -1)
+        span = ch.get("page_span") or [None, None]
+        start, end = span
+        chap_num = ch.get("chapter_number")
 
-    page_spans = []
-    for i, st in enumerate(chapter_starts):
-        if st == -1:
-            page_spans.append([None, None])
-            continue
-        # end at the page before next start
-        if i < len(chapter_starts) - 1 and chapter_starts[i+1] not in (-1, None):
-            end_page = chapter_starts[i+1] - 1
-        else:
-            # until the last page
-            end_page = page_texts[-1][0] if page_texts else None
-        page_spans.append([st, end_page])
-    return page_spans
+        # Build chapter_id from chapter_number if available
+        chap_id = f"Ch{int(chap_num):02d}" if chap_num is not None else None
 
-def bucket_by_page(objs):
-    by_page = {}
-    for o in objs:
-        p = o.get("page")
-        if p is None: 
-            continue
-        by_page.setdefault(p, []).append(o)
-    return by_page
+        example_ids = [
+            e["example_id"]
+            for e in ch.get("examples", [])
+            if isinstance(e, dict) and "example_id" in e
+        ]
 
-def main():
-    chapters = load_json(STRUCT_JSON)
-    eqs = load_jsonl(EQ_JSONL)
-    figs = load_jsonl(FIG_JSONL)
-    tbls = load_jsonl(TBL_JSONL)
-    spans = find_chapter_page_spans(chapters, RAW_TEXT)
+        problem_ids = [
+            p["problem_id"]
+            for p in ch.get("problems", [])
+            if isinstance(p, dict) and "problem_id" in p
+        ]
 
-    # Build manifest
-    manifest = {"chapters": [], "pages": {}}
-    for i, ch in enumerate(chapters):
-        span = spans[i] if i < len(spans) else [None, None]
-        manifest["chapters"].append({
+        index.append({
+            "chapter_number": chap_num,
             "chapter_title": ch.get("chapter_title"),
-            "page_span": span,
-            "objects": {
-                "equations": [],
-                "figures": [],
-                "tables": []
-            }
+            "chapter_id": chap_id,
+            "page_start": start,
+            "page_end": end,
+            "examples": example_ids,
+            "problems": problem_ids,
         })
 
-    # Bucket by page, then attach to chapters whose span covers that page
-    eq_by_page = bucket_by_page(eqs)
-    fig_by_page = bucket_by_page(figs)
-    tbl_by_page = bucket_by_page(tbls)
+    # Sort by page_start so everything is ordered in reading order
+    index.sort(key=lambda c: (c["page_start"] if c["page_start"] is not None else 10**9))
+    return index
 
-    # Fill pages section
-    all_pages = set(eq_by_page.keys()) | set(fig_by_page.keys()) | set(tbl_by_page.keys())
-    for p in sorted(all_pages):
-        manifest["pages"][str(p)] = {
-            "equations": [e["equation_id"] for e in eq_by_page.get(p,[]) if "equation_id" in e],
-            "figures": [f["figure_id"] for f in fig_by_page.get(p,[]) if "figure_id" in f],
-            "tables": [t["table_id"] for t in tbl_by_page.get(p,[]) if "table_id" in t]
-        }
 
-    # Attach IDs under chapters
-    def add_to_chapter(obj_id, page, kind):
-        for i, ch in enumerate(manifest["chapters"]):
-            span = ch["page_span"]
-            if span[0] is None or span[1] is None:
+def assign_equations_to_chapters(
+    eqs: List[Dict],
+    chapter_index: List[Dict]
+) -> Dict[str, List[str]]:
+    """
+    Given equations with a 'page' field and a chapter index with page spans,
+    return a mapping:
+        chapter_id -> [equation_id, ...]
+    """
+    by_chapter: Dict[str, List[str]] = {ch["chapter_id"]: [] for ch in chapter_index if ch["chapter_id"]}
+
+    for eq in eqs:
+        eq_id = eq.get("equation_id")
+        page = eq.get("page")
+        if eq_id is None or page is None:
+            continue
+
+        # Find chapter whose span contains this page
+        for ch in chapter_index:
+            ch_id = ch.get("chapter_id")
+            if ch_id is None:
                 continue
-            if span[0] <= page <= span[1]:
-                ch["objects"][kind].append(obj_id)
+
+            start = ch.get("page_start")
+            end   = ch.get("page_end")
+            if start is None or end is None:
+                continue
+
+            if start <= page <= end:
+                by_chapter.setdefault(ch_id, []).append(eq_id)
                 break
 
-    for e in eqs:
-        p = e.get("page")
-        if p is None or "equation_id" not in e:
+    return by_chapter
+
+
+def build_page_index(eqs: List[Dict]) -> Dict[str, Dict[str, List[str]]]:
+    """
+    Build a simple page-wise index of equations.
+
+    Returns:
+    {
+      "17": {
+        "equations": ["eq_p0017_001", ...]
+      },
+      ...
+    }
+    """
+    pages: Dict[str, Dict[str, List[str]]] = {}
+
+    for eq in eqs:
+        eq_id = eq.get("equation_id")
+        page = eq.get("page")
+        if eq_id is None or page is None:
             continue
-        add_to_chapter(e["equation_id"], p, "equations")
 
-    for f in figs:
-        p = f.get("page")
-        if p is None or "figure_id" not in f:
-            continue
-        add_to_chapter(f["figure_id"], p, "figures")
+        key = str(page)
+        if key not in pages:
+            pages[key] = {"equations": []}
+        pages[key]["equations"].append(eq_id)
 
-    for t in tbls:
-        p = t.get("page")
-        if p is None or "table_id" not in t:
-            continue
-        add_to_chapter(t["table_id"], p, "tables")
+    return pages
 
-    with open(OUT_PATH, "w", encoding="utf-8") as out_f:
-        json.dump(manifest, out_f, indent=2)
 
-    print(f"[SUCCESS] Wrote manifest -> {OUT_PATH}")
+# ---------------------------------------------------------------------
+# MAIN
+# ---------------------------------------------------------------------
+
+def main():
+    # 1) Load enriched chapter structure (with examples + problems)
+    if not STRUCT_JSON.exists():
+        raise FileNotFoundError(f"Structured file not found: {STRUCT_JSON}")
+    chapters = load_json(STRUCT_JSON)
+
+    # 2) Load equations (already cleaned) – optional, may be empty
+    eqs = load_jsonl(EQ_JSONL)
+
+    # 3) Build chapter index & assign equations
+    chapter_index = build_chapter_index(chapters)
+    eq_by_chapter = assign_equations_to_chapters(eqs, chapter_index)
+    page_index = build_page_index(eqs)
+
+    # 4) Construct manifest
+    manifest: Dict[str, Any] = {"chapters": [], "pages": page_index}
+
+    for ch in chapter_index:
+        ch_id = ch.get("chapter_id")
+        manifest["chapters"].append({
+            "chapter_id": ch_id,
+            "chapter_number": ch.get("chapter_number"),
+            "chapter_title": ch.get("chapter_title"),
+            "page_span": [ch.get("page_start"), ch.get("page_end")],
+            "examples": ch.get("examples", []),
+            "problems": ch.get("problems", []),
+            "equations": eq_by_chapter.get(ch_id, []),
+        })
+
+    # 5) Save
+    save_json(manifest, OUT_PATH)
+    print(f"[INFO] Built manifest with {len(manifest['chapters'])} chapters.")
+    print(f"[INFO] Wrote manifest -> {OUT_PATH}")
+
 
 if __name__ == "__main__":
     main()
