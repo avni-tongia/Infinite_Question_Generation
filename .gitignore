@@ -18,4 +18,14 @@ venv/
 # Data files
 data/
 
+# Model checkpoints (not needed)
+llama32_1b_hcverma_sft/checkpoint-289/
+
+# Large model weight file (LoRA adapter weights)
+llama32_1b_hcverma_sft/adapter_model.safetensors
+
+# Training metadata (useless outside training)
+llama32_1b_hcverma_sft/training_args.bin
+
+
 
