@@ -8,14 +8,15 @@ Why:
 Output:
 - runs/constrained_sft/gen_constrained.jsonl
 
-Selection rule (v0):
+Selection rule:
 - Generate K candidates for each (concept, target_level)
-- Score each candidate using difficulty.scorer.score_question
+- Score each candidate using difficulty.scorer.score_question with selected scorer (v0 or v1)
 - Prefer candidates whose bucket == target_level
-- Break ties using closeness to a target score "center"
+- Break ties using closeness to a target score "center" (scorer-specific)
 - If none match the bucket, pick the globally closest by score.
 """
 
+import argparse
 import json
 import os
 import time
@@ -46,10 +47,10 @@ CONCEPTS: List[str] = [
 ]
 
 TARGET_LEVELS = ["easy", "medium", "hard"]
-SAMPLES_PER_PAIR = 5
+SAMPLES_PER_PAIR = 10
 
 # Best-of-K
-K_CANDIDATES = 8
+K_CANDIDATES = 12
 
 GEN_KWARGS = dict(
     max_new_tokens=220,
@@ -66,13 +67,34 @@ Output ONLY the question statement (no solution).
 ### Response:
 """
 
-
-# Target score "centers" for tie-breaking (based on your thresholds: <0.55 easy, <1.05 medium, else hard)
-TARGET_SCORE_CENTER = {
+# Target score centers (tie-break) — tune later after histograms
+TARGET_SCORE_CENTER_V0 = {
     "easy": 0.35,
     "medium": 0.80,
     "hard": 1.30,
 }
+
+TARGET_SCORE_CENTER_V1 = {
+    "easy": 0.70,
+    "medium": 1.05,
+    "hard": 1.40,
+}
+
+
+def parse_args():
+    ap = argparse.ArgumentParser(description="Generate constrained Best-of-K dataset.")
+    ap.add_argument(
+        "--scorer",
+        choices=["v0", "v1"],
+        default="v0",
+        help="Difficulty scorer used for selection (v0 or v1).",
+    )
+    ap.add_argument(
+        "--out_path",
+        default=OUT_PATH,
+        help=f"Output JSONL path (default: {OUT_PATH})",
+    )
+    return ap.parse_args()
 
 
 def load_model():
@@ -103,14 +125,21 @@ def generate_one(tokenizer, model, prompt: str) -> str:
     return text.strip()
 
 
-def pick_best(cands: List[Dict[str, Any]], target_level: str) -> Dict[str, Any]:
+def target_center(target_level: str, scorer_name: str) -> float:
+    """Return the tie-break score center for a given target bucket and scorer."""
+    if scorer_name == "v1":
+        return TARGET_SCORE_CENTER_V1[target_level]
+    return TARGET_SCORE_CENTER_V0[target_level]
+
+
+def pick_best(cands: List[Dict[str, Any]], target_level: str, scorer_name: str) -> Dict[str, Any]:
     """
     Pick best candidate for the target level.
     cands entries contain: text, feats, score, bucket
     """
-    center = TARGET_SCORE_CENTER[target_level]
+    center = target_center(target_level, scorer_name)
 
-    # Prefer correct bucket
+    # Prefer correct bucket first
     in_bucket = [c for c in cands if c["bucket"] == target_level]
     pool = in_bucket if in_bucket else cands
 
@@ -120,7 +149,11 @@ def pick_best(cands: List[Dict[str, Any]], target_level: str) -> Dict[str, Any]:
 
 
 def main():
-    os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
+    args = parse_args()
+    scorer_name = args.scorer
+    out_path = args.out_path
+
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
     tokenizer, model = load_model()
 
@@ -133,11 +166,13 @@ def main():
         "target_levels": TARGET_LEVELS,
         "samples_per_pair": SAMPLES_PER_PAIR,
         "k_candidates": K_CANDIDATES,
-        "target_score_center": TARGET_SCORE_CENTER,
+        "scorer": scorer_name,
+        "target_score_center_v0": TARGET_SCORE_CENTER_V0,
+        "target_score_center_v1": TARGET_SCORE_CENTER_V1,
         "selection": "prefer bucket match; tie-break by closeness to target score center",
     }
 
-    with open(OUT_PATH, "w", encoding="utf-8") as f:
+    with open(out_path, "w", encoding="utf-8") as f:
         f.write(json.dumps({"_meta": run_meta}) + "\n")
 
     idx = 0
@@ -150,7 +185,9 @@ def main():
                 candidates = []
                 for k in range(K_CANDIDATES):
                     q = generate_one(tokenizer, model, prompt)
-                    feats, s, b = score_question(q)
+
+                    # IMPORTANT: score with the chosen scorer
+                    feats, s, b = score_question(q, scorer=scorer_name)
 
                     candidates.append({
                         "k": k,
@@ -160,7 +197,7 @@ def main():
                         "bucket": b,
                     })
 
-                chosen = pick_best(candidates, level)
+                chosen = pick_best(candidates, level, scorer_name)
 
                 rec = {
                     "id": idx,
@@ -168,16 +205,20 @@ def main():
                     "target_level": level,
                     "prompt": prompt,
                     "chosen_question": chosen["text"],
-                    "chosen_score_v0": chosen["score"],
-                    "chosen_bucket_v0": chosen["bucket"],
+                    f"chosen_score_{scorer_name}": chosen["score"],
+                    f"chosen_bucket_{scorer_name}": chosen["bucket"],
                     "candidates": [
-                        {"k": c["k"], "score_v0": c["score"], "bucket_v0": c["bucket"]}
+                        {
+                            "k": c["k"],
+                            f"score_{scorer_name}": c["score"],
+                            f"bucket_{scorer_name}": c["bucket"],
+                        }
                         for c in candidates
                     ],
                     "time_utc": datetime.now(timezone.utc).isoformat(),
                 }
 
-                with open(OUT_PATH, "a", encoding="utf-8") as f:
+                with open(out_path, "a", encoding="utf-8") as f:
                     f.write(json.dumps(rec, ensure_ascii=False) + "\n")
                     f.flush()
 
@@ -186,7 +227,7 @@ def main():
                     print(f"[PROGRESS] wrote {idx} constrained samples...")
                 time.sleep(0.02)
 
-    print(f"[OK] Saved {idx} records to: {OUT_PATH}")
+    print(f"[OK] Saved {idx} records to: {out_path}")
 
 
 if __name__ == "__main__":
