@@ -1,4 +1,3 @@
-%%writefile train_sft.py
 import os
 from pathlib import Path
 
