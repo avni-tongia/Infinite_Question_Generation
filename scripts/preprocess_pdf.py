@@ -1,35 +1,23 @@
-"""preprocess_pdf.py
-- Extracts text from HC Verma PDF with pdfplumber.
-- Falls back to OCR if a page has no selectable text.
-- Renders and saves each page as a PNG for downstream figure/equation/table extraction.
-- Writes a page-level log for provenance.
-
-Outputs:
-- data/hcverma_raw.txt         # master raw text with page markers
-- data/page_log.jsonl          # one JSON per page: source, image path, lengths
-- data/pages/page_####.png     # rendered page images
-"""
 
 import json
 from pathlib import Path
 
 import pdfplumber
-
 from ocr_utils import render_page_to_image, ocr_image_to_text
+import argparse
 
+# ---------- CLI ----------
+def parse_args():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--pdf_path", required=True, help="Path to input PDF")
+    ap.add_argument("--out_dir", required=True, help="Output dir: data/processed/<book_id>")
+    ap.add_argument("--book_id", required=True, help="Book identifier, e.g., hcverma, irodov")
 
-# ---------- CONFIG ----------
-# Reason:
-# Keep paths + config here so all downstream scripts can rely on stable locations.
-ROOT_DIR = Path(__file__).resolve().parent
-PDF_PATH = ROOT_DIR.parent / "data" / "HC_Verma.pdf"
-OUT_DIR = ROOT_DIR / "data"
-PAGES_DIR = OUT_DIR / "pages"
-RAW_TEXT_OUT = OUT_DIR / "hcverma_raw.txt"
-PAGE_LOG = OUT_DIR / "page_log.jsonl"
-
-PAGES_DIR.mkdir(parents=True, exist_ok=True)
-OUT_DIR.mkdir(parents=True, exist_ok=True)
+    # OCR controls (Irodov often needs OCR)
+    ap.add_argument("--enable_ocr", type=int, default=0, help="0/1: enable OCR fallback")
+    ap.add_argument("--min_chars", type=int, default=50, help="Trigger OCR if extracted text shorter than this")
+    ap.add_argument("--dpi", type=int, default=300, help="Render DPI for page images (OCR improves with higher DPI)")
+    return ap.parse_args()
 
 
 def extract_page_text(pdf_page) -> str:
@@ -45,15 +33,25 @@ def extract_page_text(pdf_page) -> str:
 
 
 def main() -> None:
+    args = parse_args()
+
+    ROOT_DIR = Path(__file__).resolve().parent
+    PDF_PATH = Path(args.pdf_path)
+    OUT_DIR = Path(args.out_dir)
+    PAGES_DIR = OUT_DIR / "pages"
+    RAW_TEXT_OUT = OUT_DIR / "raw.txt"
+    PAGE_LOG = OUT_DIR / "page_log.jsonl"
+
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    PAGES_DIR.mkdir(parents=True, exist_ok=True)
+
     if not PDF_PATH.exists():
         raise FileNotFoundError(f"PDF not found at {PDF_PATH}")
 
     with pdfplumber.open(PDF_PATH) as pdf, \
             RAW_TEXT_OUT.open("w", encoding="utf-8") as raw_f, \
             PAGE_LOG.open("w", encoding="utf-8") as log_f:
-
-        num_pages = len(pdf.pages)
-        print(f"[INFO] Loaded {num_pages} pages from {PDF_PATH.name}")
+    
 
         for idx, page in enumerate(pdf.pages, start=1):
             page_number = idx
@@ -65,31 +63,33 @@ def main() -> None:
             # NEW (pass file path; capture the returned image path)
             img_path = Path(
                 render_page_to_image(
-                str(PDF_PATH),           # pass the PDF file path (string)
-                page_number - 1,         # zero-based page index
-                dpi=300,
-                out_dir=str(PAGES_DIR)   # tell it where to save
+                    str(PDF_PATH),            # PDF file path
+                    page_number - 1,          # zero-based page index
+                    dpi=int(args.dpi),
+                    out_dir=str(PAGES_DIR)    # where to save
                 )
-                    )
+            )
 
 
             # 2) Extract text, preferring PDF text
             text = extract_page_text(page)
             text_source = "pdf"
 
-            if not text:
-                # Fallback: OCR on the rendered page image
-                # Uses: ocr_image_to_text from ocr_utils (Tesseract/other under the hood).
+            # Trigger OCR if:
+            # - no extracted text, OR extracted text is too short (common for scanned PDFs)
+            if (len(text.strip()) < int(args.min_chars)) and int(args.enable_ocr) == 1:
                 ocr_text = ocr_image_to_text(img_path)
                 ocr_text = (ocr_text or "").strip()
                 if ocr_text:
                     text = ocr_text
                     text_source = "ocr"
                 else:
-                    # No text at all (blank/figure-only page).
-                    # We still log and keep alignment via page marker.
                     text = ""
                     text_source = "none"
+            elif not text:
+                # No OCR allowed, but also no text
+                text = ""
+                text_source = "none"
 
             # 3) Write page marker + text
             # Why:

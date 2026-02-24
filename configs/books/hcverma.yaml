@@ -1,0 +1,1 @@
+chapter_heading_regex: "(?im)^\\s*(chapter|chaffer)\\s+(\\d+)[^\\n]*$"

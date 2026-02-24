@@ -1,0 +1,8 @@
+# Irodov question numbering like 1.1, 1.2, 1.3 ...
+question_start_regex: "(?m)^\\s*(\\d+\\.\\d+)\\s+"
+
+# Optional: if chapter detection needed later
+# Matches: PART ONE, PART TWO, PART I, Part III, etc.
+chapter_heading_regex: "(?im)^\\s*part\\s+((?:one|two|three|four|five|six|seven|eight|nine|ten)|(?:i|ii|iii|iv|v|vi|vii|viii|ix|x))\\s*$"
+
+figure_ref_regex: "(?i)\\b(fig\\.|figure)\\b"

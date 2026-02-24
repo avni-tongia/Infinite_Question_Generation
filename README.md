@@ -1,117 +1,47 @@
-# 📘 Multimodal HC Verma Pipeline
+# File structure
+data > raw > (place raw PDFs of books)
 
-This repository processes the **HC Verma PDF** into a structured, multimodal dataset with **text, equations (LaTeX), figures, tables, and embeddings**.  
-It produces a final `manifest.json` linking everything together for downstream **RAG, QA, and fine-tuning**.
-
----
-
-## 🔧 Features
-
-- **Text extraction** with OCR fallback (Tesseract) for scanned pages.  
-- **Chapter structuring** into JSON + Markdown.  
-- **Examples/Problems scaffolding** for future parsing.  
-- **Equation extraction** (text → LaTeX, with image-equation stub).  
-- **Figure extraction** (images + caption guesses).  
-- **Table extraction** to CSV.  
-- **Text embeddings** with SentenceTransformers.  
-- **Image embeddings** (figures & equations) with CLIP.  
-- **Cross-linking** into one coherent `manifest.json`.  
-- **Single driver script (`run_pipeline.py`)** to run the entire pipeline end-to-end.  
-
----
-
-## 🖥️ Setup
-
-### 1. Create virtual environment
-Windows (PowerShell):
-```bash
+# Create a Virtual Environment
 python -m venv venv
-venv\Scripts\activate
-```
+venv\Scripts\Activate
 
-macOS:
-```bash
-python3 -m venv venv
-source venv/bin/activate
-```
-
-### 2. Install system dependencies
-Windows (Chocolatey):
-```bash
-choco install tesseract ghostscript
-```
-
-macOS (Homebrew):
-```bash
-brew install tesseract ghostscript
-```
-
-### 3. Install Python dependencies
-```bash
-pip install --upgrade pip
+# Install Dependencies
 pip install -r requirements.txt
-```
 
----
+# Run OCR Page extraction for HC Verma (Questions in the Bucket-Easy)
+python scripts/preprocess_pdf.py --pdf_path data/raw/HC_Verma.pdf --out_dir data/processed/hcverma --book_id hcverma --enable_ocr 0 --min_chars 50 --dpi 300
 
-## 📂 Folder Structure
+# Run OCR Page extraction for Irodov (Questions in the Bucket-Hard)
+python scripts/preprocess_pdf.py --pdf_path data/raw/Irodov.pdf --out_dir data/processed/irodov --book_id irodov --enable_ocr 1 --min_chars 50 --dpi 350
 
-```
-your-repo/
-│
-├── Scripts/                  # all Python scripts
-│   ├── preprocess_pdf.py
-│   ├── structure_text.py
-│   ├── extract_examples_problems.py
-│   ├── build_embeddings.py
-│   ├── ocr_utils.py
-│   ├── extract_equations.py
-│   ├── extract_figures.py
-│   ├── extract_tables.py
-│   ├── build_multimodal_embeddings.py
-│   └── index_manifest.py
-│
-├── data/                     # input + generated data
-│   ├── HC_Verma.pdf          # input book (only manual file)
-│   ├── hcverma_raw.txt
-│   ├── page_log.jsonl
-│   ├── pages/
-│   ├── hcverma_structured.json
-│   ├── hcverma_with_examples.json
-│   ├── equations/
-│   ├── figures/
-│   ├── tables/
-│   ├── vectors/
-│   └── manifest.json
-│
-├── run_pipeline.py           # driver script (runs all steps in order)
-├── requirements.txt
-├── README.md
-└── .gitignore
-```
+# Structuring Extracted Texts
+python scripts/structure_text.py --in_raw data/processed/hcverma/raw.txt --out_json data/processed/hcverma/structured.json --out_md data/processed/hcverma/structured.md --book_id hcverma --book_spec configs/books/hcverma.yaml
 
----
+python scripts/structure_text.py --in_raw data/processed/irodov/raw.txt --out_json data/processed/irodov/structured.json --out_md data/processed/irodov/structured.md --book_id irodov --book_spec configs/books/irodov.yaml
 
-## 🚀 How to Run
+# Extracting problems for Irodov
+python scripts/extract_irodov_questions.py `
+--structured_json data/processed/irodov/structured.json `
+--out_jsonl data/processed/irodov/problems.jsonl `
+--book_id irodov `
+--bucket_gt hard
 
-From the project root:
-```bash
-python run_pipeline.py
-```
+# Extracting problms for HC Verma
+python scripts/extract_hcverma_questions.py `
+--structured_json data/processed/hcverma/structured.json `
+--out_jsonl data/processed/hcverma/problems.jsonl `
+--book_id hcverma `
+--bucket_gt easy
 
-This will execute all steps in order automatically and generate outputs in the `data/` folder.  
+# Merging the two into one singl dataset
+python scripts/datasets/merge_books.py `
+  --inputs data/processed/hcverma/problems.jsonl data/processed/irodov/problems.jsonl `
+  --out data/merged/all_problems.jsonl
 
----
-
-## ✅ Outputs
-
-- **Raw text:** `data/hcverma_raw.txt`  
-- **Chapters:** `data/hcverma_structured.json`, `hcverma_structured.md`  
-- **Examples/Problems scaffold:** `data/hcverma_with_examples.json`  
-- **Equations (LaTeX + stubs):** `data/equations/equations.jsonl` (+ PNGs if image detection added)  
-- **Figures:** `data/figures/figures.jsonl` + PNGs  
-- **Tables:** `data/tables/tables.jsonl` + CSVs  
-- **Embeddings:**  
-  - Text → `hcverma_embeddings.npy`, `hcverma_embeddings_with_metadata.json`  
-  - Images → `vectors/figures_clip.npy`, `vectors/equations_clip.npy` (+ JSON metadata)  
-- **Manifest:** `data/manifest.json`
+# Splitting dataset into test and train sets
+python scripts/datasets/build_splits_balanced.py `
+  --in data/merged/all_problems.jsonl `
+  --out_dir data/merged/splits_easy_hard `
+  --buckets easy hard `
+  --split 0.85 0.10 0.05 `
+  --seed 42

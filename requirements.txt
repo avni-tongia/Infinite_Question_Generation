@@ -1,7 +1,16 @@
+# Extraction from PDF
 pdfplumber
 pymupdf
+pdf2image 
+pyyaml 
+tqdm
 pillow
 pytesseract
+
+pandas
+numpy
+regex
+
 sentence-transformers
 datasets
 accelerate

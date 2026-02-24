@@ -1,36 +1,45 @@
-# Python cache files
+# =========================
+# Python cache / build
+# =========================
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
 *.pyd
-
-# Database files
-*.db
-*.sqlite3
-
-# Jupyter checkpoints
 .ipynb_checkpoints/
 
-# Virtual environment
-.env
+# =========================
+# Virtual environments
+# =========================
 venv/
-
-# Data files
-data/
-
-# Model checkpoints (not needed)
-llama32_1b_hcverma_sft/checkpoint-289/
-
-# Large model weight file (LoRA adapter weights)
-llama32_1b_hcverma_sft/adapter_model.safetensors
-
-# Training metadata (useless outside training)
-llama32_1b_hcverma_sft/training_args.bin
-
-runs/
-outputs/
 .venv/
+.env/
+
+# =========================
+# Logs
+# =========================
 *.log
 
+# =========================
+# Generated datasets
+# =========================
+data/processed/
+data/raw/
+data/merged/
+scripts/data/
 
+# =========================
+# Training runs / outputs
+# =========================
+runs/
+outputs/
 
+# =========================
+# Model artifacts (large)
+# =========================
+llama32_1b_hcverma_sft/
+*.safetensors
+
+# =========================
+# Database files
+# =========================
+*.db
+*.sqlite3
