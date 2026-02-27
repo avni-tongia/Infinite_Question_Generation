@@ -33,7 +33,7 @@ python scripts/extract_hcverma_questions.py `
 --book_id hcverma `
 --bucket_gt easy
 
-# Merging the two into one singl dataset
+# Merging the two into one single dataset
 python scripts/datasets/merge_books.py `
   --inputs data/processed/hcverma/problems.jsonl data/processed/irodov/problems.jsonl `
   --out data/merged/all_problems.jsonl
@@ -45,3 +45,25 @@ python scripts/datasets/build_splits_balanced.py `
   --buckets easy hard `
   --split 0.85 0.10 0.05 `
   --seed 42
+
+# Checking Validity of V0 Scorer (Reward Scorer) on Val and Test set 
+python scripts/eval/eval_difficulty_scorer.py `
+   --val data/merged/splits_easy_hard/val.jsonl `
+   --test data/merged/splits_easy_hard/test.jsonl `
+   --out_dir runs/scorer_eval/reward_v0 `
+   --scorer difficulty.reward_scorer_v0:score
+
+# Checking Validity of V1 scorer (Judge Scorer) on Val and Test set
+python scripts/eval/eval_difficulty_scorer.py `
+   --val data/merged/splits_easy_hard/val.jsonl `
+   --test data/merged/splits_easy_hard/test.jsonl `
+   --out_dir runs/scorer_eval/judge_v1 `
+   --scorer difficulty.judge_scorer_v1:score
+
+# Building datasets for sft training
+python scripts/datasets/build_sft_dataset.py `
+   --in_train data/merged/splits_easy_hard/train.jsonl `
+   --in_val data/merged/splits_easy_hard/val.jsonl `
+   --in_test data/merged/splits_easy_hard/test.jsonl `
+   --out_dir data/sft/splits_easy_hard `
+   --prompt_style exam
