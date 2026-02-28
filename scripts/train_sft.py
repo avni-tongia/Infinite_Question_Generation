@@ -7,6 +7,7 @@ from typing import Dict, List, Optional
 
 import torch
 from datasets import load_dataset
+from transformers import TrainingArguments
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
