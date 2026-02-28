@@ -296,41 +296,30 @@ def main():
     collator = DataCollatorForCausalLM(tokenizer=tokenizer)
 
     train_args = TrainingArguments(
-        output_dir=args.output_dir,
-        #overwrite_output_dir=True,
+    output_dir=args.output_dir,
 
-        num_train_epochs=args.num_train_epochs,
-        learning_rate=args.learning_rate,
-        warmup_ratio=args.warmup_ratio,
-        weight_decay=args.weight_decay,
+    num_train_epochs=args.num_train_epochs,
+    learning_rate=args.learning_rate,
+    weight_decay=args.weight_decay,
 
-        per_device_train_batch_size=args.per_device_train_batch_size,
-        per_device_eval_batch_size=args.per_device_eval_batch_size,
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
+    per_device_train_batch_size=args.per_device_train_batch_size,
+    per_device_eval_batch_size=args.per_device_eval_batch_size,
+    gradient_accumulation_steps=args.gradient_accumulation_steps,
 
-        # Logging / eval / save behavior
-        eval_strategy="steps",
-        eval_steps=args.eval_steps,
-        save_strategy="steps",
-        save_steps=args.save_steps,
-        logging_steps=args.logging_steps,
-        save_total_limit=args.save_total_limit,
+    eval_strategy="steps",          # NOT evaluation_strategy
+    eval_steps=args.eval_steps,
+    save_steps=args.save_steps,
+    logging_steps=args.logging_steps,
 
-        # Mixed precision
-        bf16=args.bf16,
-        fp16=args.fp16,
+    save_total_limit=args.save_total_limit,
 
-        # Progress visibility
-        disable_tqdm=args.disable_tqdm,
-        log_level="info",
+    bf16=args.bf16,
+    fp16=args.fp16,
 
-        report_to="none",
-
-        # Helps stability
-        lr_scheduler_type="cosine",
-        optim="adamw_torch",
-        max_grad_norm=1.0,
-    )
+    lr_scheduler_type="cosine",
+    max_grad_norm=1.0,
+    report_to="none",
+)
 
     trainer = Trainer(
     model=model,
