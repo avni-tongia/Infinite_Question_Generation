@@ -13,6 +13,7 @@ from transformers import (
     Trainer,
     TrainingArguments,
     set_seed,
+    TrainerCallback,
 )
 
 # Optional PEFT / QLoRA
@@ -22,6 +23,20 @@ except Exception:
     LoraConfig = None
     get_peft_model = None
     prepare_model_for_kbit_training = None
+
+
+class ProgressPrinterCallback(TrainerCallback):
+    """
+    Prints structured logs whenever Trainer logs (based on logging_steps / eval_steps).
+    This is safe (won't spam per batch) and works with nohup (logs go to file).
+    """
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs:
+            step = state.global_step
+            # Keep it compact and readable
+            keys = ["loss", "eval_loss", "learning_rate", "epoch"]
+            compact = {k: logs.get(k) for k in keys if k in logs}
+            print(f"[LOG step={step}] {compact}")
 
 
 def parse_args():
@@ -55,16 +70,30 @@ def parse_args():
     ap.add_argument("--lora_r", type=int, default=16)
     ap.add_argument("--lora_alpha", type=int, default=32)
     ap.add_argument("--lora_dropout", type=float, default=0.05)
-    ap.add_argument("--lora_target_modules", type=str, default="q_proj,k_proj,v_proj,o_proj",
-                    help="Comma-separated target module names")
+    ap.add_argument(
+        "--lora_target_modules",
+        type=str,
+        default="q_proj,k_proj,v_proj,o_proj",
+        help="Comma-separated target module names",
+    )
 
     # Mask prompt loss (recommended ON)
-    ap.add_argument("--mask_prompt_loss", action="store_true",
-                    help="Compute loss only on completion tokens (recommended)")
+    ap.add_argument(
+        "--mask_prompt_loss",
+        action="store_true",
+        help="Compute loss only on completion tokens (recommended)",
+    )
 
     # Mixed precision
     ap.add_argument("--bf16", action="store_true")
     ap.add_argument("--fp16", action="store_true")
+
+    # Extra logging control
+    ap.add_argument(
+        "--disable_tqdm",
+        action="store_true",
+        help="Disable tqdm progress bar (useful if logs become messy). Default: enabled.",
+    )
 
     return ap.parse_args()
 
@@ -78,7 +107,7 @@ def load_jsonl_dataset(train_file: str, val_file: str):
 def build_text(prompt: str, completion: str, tokenizer) -> str:
     """
     Simple format: prompt + two newlines + completion + EOS
-    This is compatible across instruct models (Qwen/Mistral) without relying on chat templates.
+    Compatible across instruct models (Qwen/Mistral) without relying on chat templates.
     """
     prompt = prompt.strip()
     completion = completion.strip()
@@ -92,7 +121,6 @@ def tokenize_and_mask(example: Dict, tokenizer, max_len: int, mask_prompt_loss: 
 
     full_text = build_text(prompt, completion, tokenizer)
 
-    # Tokenize full text
     tok = tokenizer(
         full_text,
         truncation=True,
@@ -103,11 +131,9 @@ def tokenize_and_mask(example: Dict, tokenizer, max_len: int, mask_prompt_loss: 
 
     input_ids = tok["input_ids"]
     attention_mask = tok["attention_mask"]
-
     labels = input_ids.copy()
 
     if mask_prompt_loss:
-        # Tokenize the prefix (prompt + "\n\n") so we can mask its tokens in labels
         prefix = f"{prompt.strip()}\n\n"
         prefix_tok = tokenizer(
             prefix,
@@ -119,7 +145,6 @@ def tokenize_and_mask(example: Dict, tokenizer, max_len: int, mask_prompt_loss: 
         )
         prefix_len = len(prefix_tok["input_ids"])
 
-        # Mask labels for prefix tokens
         for i in range(min(prefix_len, len(labels))):
             labels[i] = -100
 
@@ -136,7 +161,6 @@ class DataCollatorForCausalLM:
     pad_to_multiple_of: Optional[int] = 8
 
     def __call__(self, features: List[Dict]) -> Dict[str, torch.Tensor]:
-        # Pad input_ids/attention_mask/labels to max length in batch
         max_len = max(len(f["input_ids"]) for f in features)
 
         if self.pad_to_multiple_of is not None:
@@ -174,11 +198,9 @@ def make_model_and_tokenizer(args):
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    quant_config = None
     model_kwargs = {"torch_dtype": torch.bfloat16 if args.bf16 else (torch.float16 if args.fp16 else None)}
 
     if args.use_4bit:
-        # QLoRA path
         try:
             from transformers import BitsAndBytesConfig
         except Exception as e:
@@ -228,19 +250,47 @@ def main():
     args = parse_args()
     set_seed(args.seed)
 
-    ds = load_jsonl_dataset(args.train_file, args.val_file)
+    # Startup prints (useful under nohup too)
+    print("=" * 70)
+    print("[INFO] Starting SFT Training")
+    print(f"[INFO] model_name_or_path  : {args.model_name_or_path}")
+    print(f"[INFO] train_file         : {args.train_file}")
+    print(f"[INFO] val_file           : {args.val_file}")
+    print(f"[INFO] output_dir         : {args.output_dir}")
+    print(f"[INFO] max_seq_len        : {args.max_seq_len}")
+    print(f"[INFO] train_bs           : {args.per_device_train_batch_size}")
+    print(f"[INFO] eval_bs            : {args.per_device_eval_batch_size}")
+    print(f"[INFO] grad_accum         : {args.gradient_accumulation_steps}")
+    print(f"[INFO] lr                 : {args.learning_rate}")
+    print(f"[INFO] epochs             : {args.num_train_epochs}")
+    print(f"[INFO] use_lora           : {args.use_lora}")
+    print(f"[INFO] use_4bit           : {args.use_4bit}")
+    print(f"[INFO] mask_prompt_loss   : {args.mask_prompt_loss}")
+    print(f"[INFO] bf16               : {args.bf16}")
+    print(f"[INFO] fp16               : {args.fp16}")
+    print("=" * 70)
 
+    if not args.bf16 and not args.fp16:
+        print("[WARN] Neither bf16 nor fp16 enabled. Training will use fp32 (slower, more VRAM).")
+
+    # Dataset load
+    ds = load_jsonl_dataset(args.train_file, args.val_file)
+    print(f"[INFO] Loaded datasets: train={len(ds['train'])}, val={len(ds['validation'])}")
+
+    # Model + tokenizer
     model, tokenizer = make_model_and_tokenizer(args)
 
     # Tokenize dataset
     def _map_fn(ex):
         return tokenize_and_mask(ex, tokenizer, args.max_seq_len, args.mask_prompt_loss)
 
+    print("[INFO] Tokenizing + masking...")
     ds_tok = ds.map(
         _map_fn,
         remove_columns=ds["train"].column_names,
         desc="Tokenizing + masking prompt loss",
     )
+    print(f"[INFO] Tokenized datasets: train={len(ds_tok['train'])}, val={len(ds_tok['validation'])}")
 
     collator = DataCollatorForCausalLM(tokenizer=tokenizer)
 
@@ -257,14 +307,21 @@ def main():
         per_device_eval_batch_size=args.per_device_eval_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
 
+        # Logging / eval / save behavior
         evaluation_strategy="steps",
         eval_steps=args.eval_steps,
+        save_strategy="steps",
         save_steps=args.save_steps,
         logging_steps=args.logging_steps,
         save_total_limit=args.save_total_limit,
 
+        # Mixed precision
         bf16=args.bf16,
         fp16=args.fp16,
+
+        # Progress visibility
+        disable_tqdm=args.disable_tqdm,
+        log_level="info",
 
         report_to="none",
 
@@ -281,11 +338,15 @@ def main():
         eval_dataset=ds_tok["validation"],
         tokenizer=tokenizer,
         data_collator=collator,
+        callbacks=[ProgressPrinterCallback()],
     )
 
+    print("[INFO] Starting trainer.train() ...")
     trainer.train()
+    print("[INFO] Training complete.")
 
     # Save
+    print("[INFO] Saving final model + tokenizer...")
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
     print(f"[OK] saved model to {args.output_dir}")
