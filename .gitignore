@@ -25,7 +25,7 @@ data/processed/
 data/raw/
 data/merged/
 scripts/data/
-data/sft
+# data/sft
 
 # =========================
 # Training runs / outputs
