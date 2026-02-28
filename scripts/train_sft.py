@@ -296,7 +296,7 @@ def main():
 
     train_args = TrainingArguments(
         output_dir=args.output_dir,
-        overwrite_output_dir=True,
+        #overwrite_output_dir=True,
 
         num_train_epochs=args.num_train_epochs,
         learning_rate=args.learning_rate,
