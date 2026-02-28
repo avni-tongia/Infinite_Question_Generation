@@ -333,15 +333,14 @@ def main():
     )
 
     trainer = Trainer(
-        model=model,
-        args=train_args,
-        train_dataset=ds_tok["train"],
-        eval_dataset=ds_tok["validation"],
-        tokenizer=tokenizer,
-        data_collator=collator,
-        callbacks=[ProgressPrinterCallback()],
+    model=model,
+    args=train_args,
+    train_dataset=train_ds,
+    eval_dataset=val_ds,
+    data_collator=data_collator,
+    processing_class=tokenizer,   # <-- replace tokenizer= with this
     )
-
+    
     print("[INFO] Starting trainer.train() ...")
     trainer.train()
     print("[INFO] Training complete.")
