@@ -308,7 +308,7 @@ def main():
         gradient_accumulation_steps=args.gradient_accumulation_steps,
 
         # Logging / eval / save behavior
-        evaluation_strategy="steps",
+        eval_strategy="steps",
         eval_steps=args.eval_steps,
         save_strategy="steps",
         save_steps=args.save_steps,
