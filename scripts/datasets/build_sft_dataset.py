@@ -28,24 +28,31 @@ def normalize_ws(s: str) -> str:
     return s.strip()
 
 
-def make_prompt(bucket: str, style: str = "minimal") -> str:
+def make_prompt(bucket: str, style: str = "minimal", preference: str = "parsimonious") -> str:
     """
-    style="minimal": purely difficulty conditioning
-    style="exam": slightly more structured (often helps instruction models)
+    style="minimal": difficulty and preference conditioning.
+    style="exam": structured rules to help instruction following.
     """
     bucket = bucket.upper()
+    pref = preference.upper()
+    
+    # Your preference logic: combining difficulty and the parsimony constraint
+    tags = f"[DIFFICULTY={bucket}][PREFERENCE={pref}]"
+
     if style == "exam":
         return (
-            f"[DIFFICULTY={bucket}]\n"
-            f"Task: Write ONE physics problem matching the requested difficulty.\n"
+            f"{tags}\n"
+            f"Task: Write ONE physics problem matching the requested requirements.\n"
             f"Rules:\n"
             f"- Output ONLY the problem statement.\n"
+            f"- Ensure the problem is parsimonious (no irrelevant info or unused equations).\n"
             f"- Do NOT provide a solution.\n"
             f"- Include numbers/units where appropriate.\n"
         )
+    
     # minimal default
     return (
-        f"[DIFFICULTY={bucket}]\n"
+        f"{tags}\n"
         f"Generate a physics problem.\n"
         f"Return ONLY the problem statement (no solution, no hints)."
     )
@@ -53,11 +60,11 @@ def make_prompt(bucket: str, style: str = "minimal") -> str:
 
 def build_sft_example(ex: Dict[str, Any], prompt_style: str) -> Dict[str, Any]:
     bucket = ex["bucket_gt"].upper()
-    prompt = make_prompt(bucket=bucket, style=prompt_style)
+    
+    # We treat textbook data as the gold standard for parsimony
+    prompt = make_prompt(bucket=bucket, style=prompt_style, preference="parsimonious")
     completion = normalize_ws(ex["problem_text"])
 
-    # Important: keep completion as the raw problem statement only.
-    # If extraction included any leading "Q." markers, keep them (consistent with data).
     return {
         "prompt": prompt,
         "completion": completion,
@@ -67,6 +74,7 @@ def build_sft_example(ex: Dict[str, Any], prompt_style: str) -> Dict[str, Any]:
             "source_book": ex.get("source_book"),
             "chapter": ex.get("chapter"),
             "needs_figure": ex.get("needs_figure", False),
+            "preference": "parsimonious"
         }
     }
 
@@ -90,7 +98,6 @@ def main():
         rows_out = []
         n = 0
         for ex in read_jsonl(inp_path):
-            # Minimal validation
             if "problem_text" not in ex or "bucket_gt" not in ex:
                 raise ValueError(f"Missing required keys in example: {ex.keys()}")
 
