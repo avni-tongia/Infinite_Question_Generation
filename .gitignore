@@ -44,3 +44,4 @@ llama32_1b_hcverma_sft/
 # =========================
 *.db
 *.sqlite3
+.DS_Store
