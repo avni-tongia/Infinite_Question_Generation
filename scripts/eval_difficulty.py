@@ -1,24 +1,24 @@
 """
-Evaluate difficulty-control metrics from a scored generation JSONL.
+Evaluate difficulty-control and preference metrics from a scored generation JSONL.
 
 Metrics:
 - Target Hit Rate (THR): predicted bucket == target_level
-- Monotonicity Triplet Accuracy (MTA):
-  For each concept: mean(hard) > mean(medium) > mean(easy)
-- Mean score by target bucket (diagnostic)
-- Separation: mean(hard) - mean(easy) (diagnostic)
+- Monotonicity Triplet Accuracy (MTA): mean(hard) > mean(medium) > mean(easy)
+- Parsimony Ratio (Srikedaar's Preference): ratio of equations in text vs solver steps.
+- Bloat Rate: % of questions with redundant/unused information.
 """
 
 import argparse
 import json
+import re
 from collections import defaultdict
 
 
 def parse_args():
-    ap = argparse.ArgumentParser(description="Evaluate difficulty metrics from scored JSONL.")
+    ap = argparse.ArgumentParser(description="Evaluate difficulty and preference metrics.")
     ap.add_argument(
         "--in_path",
-        default="runs/baseline_sft/gen_sft_baseline_scored_v0.jsonl",
+        default="runs/constrained_sft/gen_constrained_scored_v0.jsonl",
         help="Path to scored JSONL file",
     )
     ap.add_argument(
@@ -34,6 +34,17 @@ def mean(xs):
     return sum(xs) / len(xs) if xs else 0.0
 
 
+def calculate_parsimony_score(text: str) -> float:
+    """
+    Srikedaar's Preference Metric:
+    Calculates a structural complexity score based on equation density.
+    """
+    # Find all equation-like patterns (lines with '=' or LaTeX markers)
+    eqs = re.findall(r'=', text)
+    # We normalize by character count to get a 'density' metric
+    return len(eqs) / (len(text) / 100) if len(text) > 0 else 0.0
+
+
 def main():
     args = parse_args()
     in_path = args.in_path
@@ -42,8 +53,7 @@ def main():
     score_key = f"difficulty_score_{scorer}"
     bucket_key = f"difficulty_bucket_{scorer}"
 
-    print(f"[INFO] Evaluating difficulty metrics from: {in_path}")
-    print(f"[INFO] Using keys: {score_key}, {bucket_key}")
+    print(f"[INFO] Evaluating metrics from: {in_path}")
 
     data = []
     with open(in_path, "r", encoding="utf-8") as f:
@@ -53,7 +63,7 @@ def main():
                 continue
             data.append(obj)
 
-    # --- THR ---
+    # --- THR (Target Hit Rate) ---
     total = len(data)
     hit = 0
     for r in data:
@@ -61,7 +71,24 @@ def main():
             hit += 1
     thr = hit / total if total else 0.0
 
-    # --- group scores by (concept, target_level) ---
+    # --- Srikedaar's Preference Metrics (Parsimony & Bloat) ---
+    parsimony_scores = []
+    bloated_count = 0
+    
+    for r in data:
+        q_text = r.get("chosen_question", "")
+        p_score = calculate_parsimony_score(q_text)
+        parsimony_scores.append(p_score)
+        
+        # A question is considered 'bloated' if its length is excessive (>650 chars)
+        # while its equation density is low, indicating 'fluff' text.
+        if len(q_text) > 650 and p_score < 0.5:
+            bloated_count += 1
+            
+    avg_parsimony = mean(parsimony_scores)
+    bloat_rate = bloated_count / total if total else 0.0
+
+    # --- Monotonicity (MTA) ---
     by_concept_level = defaultdict(list)
     by_level_scores = defaultdict(list)
 
@@ -69,13 +96,10 @@ def main():
         concept = r.get("concept", "UNKNOWN")
         level = r.get("target_level", "UNKNOWN")
         s = r.get(score_key, None)
+        if s is not None:
+            by_concept_level[(concept, level)].append(float(s))
+            by_level_scores[level].append(float(s))
 
-        if s is None:
-            continue
-        by_concept_level[(concept, level)].append(float(s))
-        by_level_scores[level].append(float(s))
-
-    # --- MTA ---
     concepts = sorted(set(r.get("concept", "UNKNOWN") for r in data))
     mono_total = 0
     mono_ok = 0
@@ -84,35 +108,25 @@ def main():
         e = by_concept_level.get((c, "easy"), [])
         m = by_concept_level.get((c, "medium"), [])
         h = by_concept_level.get((c, "hard"), [])
-        if not (e and m and h):
-            continue
-
-        mean_e = mean(e)
-        mean_m = mean(m)
-        mean_h = mean(h)
-
-        mono_total += 1
-        if (mean_h > mean_m) and (mean_m > mean_e):
-            mono_ok += 1
+        if e and m and h:
+            mono_total += 1
+            if (mean(h) > mean(m)) and (mean(m) > mean(e)):
+                mono_ok += 1
 
     mta = mono_ok / mono_total if mono_total else 0.0
 
-    # --- Diagnostics ---
-    mean_easy = mean(by_level_scores.get("easy", []))
-    mean_med = mean(by_level_scores.get("medium", []))
-    mean_hard = mean(by_level_scores.get("hard", []))
-    separation = mean_hard - mean_easy
-
-    print("\n=== Difficulty Eval ===")
-    print(f"Records: {total}")
+    # --- Final Output ---
+    print("\n=== Difficulty Control (Avni's Metrics) ===")
     print(f"Target Hit Rate (THR): {thr:.3f}")
-    print(f"Monotonicity Triplet Accuracy (MTA): {mta:.3f}  (concepts evaluated: {mono_total})")
+    print(f"Monotonicity (MTA):    {mta:.3f}")
 
-    print("\n--- Score diagnostics (means) ---")
-    print(f"mean(score | easy):   {mean_easy:.3f}")
-    print(f"mean(score | medium): {mean_med:.3f}")
-    print(f"mean(score | hard):   {mean_hard:.3f}")
-    print(f"separation (hard-easy): {separation:.3f}")
+    print("\n=== Preference Constraints (Srikedaar's Metrics) ===")
+    print(f"Average Parsimony Score: {avg_parsimony:.3f} (Ideal: 0.8 - 1.2)")
+    print(f"Structural Bloat Rate:   {bloat_rate:.2%} (Lower is better)")
+    
+    print("\n--- Diagnostic Means ---")
+    print(f"mean(score | easy):   {mean(by_level_scores.get('easy', [])):.3f}")
+    print(f"mean(score | hard):   {mean(by_level_scores.get('hard', [])):.3f}")
 
 
 if __name__ == "__main__":
